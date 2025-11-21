@@ -15,70 +15,55 @@ TOPIC = 'opensky'
 
 # OpenSky API URL
 OPENSKY_URL = "https://opensky-network.org/api/states/all"
-try:
-    # Create Kafka producer
-    producer = KafkaProducer(
-        bootstrap_servers=KAFKA_BROKER,
-        value_serializer=lambda v: json.dumps(v).encode('utf-8')
-    )
-    logger.info("Kafka producer created successfully")
-except KafkaError as e:
-    logger.error(f"Kafka connection error: {e}")
 
+# Tor SOCKS5 proxy (dperson/torproxy)
+TOR_PROXIES = {
+    "http":  "socks5h://tor:9050",
+    "https": "socks5h://tor:9050"
+}
 
-print("🚀 Producer started. Sending data to Kafka...")
+# Kafka producer
+producer = KafkaProducer(
+    bootstrap_servers=KAFKA_BROKER,
+    value_serializer=lambda v: json.dumps(v).encode('utf-8'),
+    max_request_size=5_000_000  # optional, just in case
+)
+
+logger.info("Kafka producer created successfully")
+print("🚀 Producer started. Sending incremental data to Kafka via Tor...")
+
+# Track last seen for each aircraft
+last_seen = {}  # {icao24: last_contact}
 
 while True:
     try:
-        # Fetch data from OpenSky
-        response = requests.get(OPENSKY_URL)
-        data = response.json()  # dictionary with 'time' and 'states'
+        # Fetch OpenSky data via Tor
+        response = requests.get(OPENSKY_URL, proxies=TOR_PROXIES, timeout=20)
 
-        # Send to Kafka topic
-        producer.send(TOPIC, data)
-        producer.flush()  # ensure message is sent
-        print(f"✅ Sent data with {len(data.get('states', []))} flights")
+        if response.status_code != 200:
+            logger.warning(f"OpenSky returned {response.status_code}")
+            time.sleep(10)
+            continue
+
+        data = response.json()
+        states = data.get("states", [])
+
+        print("Fetched:", len(states), "flights")
+
+        new_count = 0
+        for state in states:
+            icao24 = state[0]       
+            last_contact = state[4] 
+
+            if icao24 not in last_seen or last_contact > last_seen[icao24]:
+                producer.send(TOPIC, state)
+                last_seen[icao24] = last_contact
+                new_count += 1
+
+        producer.flush()
+        print(f"✅ Sent {new_count} new/updated flights to Kafka")
 
     except Exception as e:
-        print("❌ Error fetching/sending data:", e)
+        logger.error(f"Error fetching/sending data: {e}")
 
-    time.sleep(30)  # fetch every 10 seconds
-
-
-
-# import os, time, json, requests
-# from kafka import KafkaProducer
-
-# KAFKA_BOOTSTRAP = os.getenv('KAFKA_BOOTSTRAP', 'kafka:9092')
-# TOPIC = os.getenv('TOPIC', 'airdata_raw')
-# INTERVAL = int(os.getenv('FETCH_INTERVAL', '25'))
-
-# producer = KafkaProducer(
-#     bootstrap_servers=[KAFKA_BOOTSTRAP],
-#     value_serializer=lambda v: json.dumps(v).encode('utf-8'),
-#     retries=5
-# )
-
-# URL = "https://opensky-network.org/api/states/all"
-
-# def fetch_opensky():
-#     try:
-#         resp = requests.get(URL, timeout=10)
-#         resp.raise_for_status()
-#         return resp.json()
-#     except Exception as e:
-#         print("Fetch error:", e)
-#         return None
-
-# if __name__ == "__main__":
-#     print("Producer started, sending to", KAFKA_BOOTSTRAP, "topic:", TOPIC)
-#     while True:
-#         data = fetch_opensky()
-#         if data:
-#             try:
-#                 producer.send(TOPIC, data)
-#                 producer.flush()
-#                 print("Sent batch -", len(data.get('states', [])) if isinstance(data, dict) else "unknown")
-#             except Exception as e:
-#                 print("Kafka send error:", e)
-#         time.sleep(INTERVAL)
+    time.sleep(30)

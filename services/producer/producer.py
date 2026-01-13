@@ -35,6 +35,22 @@ producer = KafkaProducer(
 logger.info("Kafka producer created successfully")
 print("🚀 Producer started. Sending incremental data to Kafka via Tor...")
 
+# # Kafka producer
+# producer = None
+# while producer is None:
+#     try:
+#         producer = KafkaProducer(
+#             bootstrap_servers=KAFKA_BROKER,
+#             value_serializer=lambda v: json.dumps(v).encode('utf-8'),
+#             max_request_size=5_000_000  # optional, just in case
+#         )
+#         logger.info("Kafka producer created successfully")
+#     except Exception as e:
+#         logger.warning(f"Kafka not ready, retrying in 5 seconds: {e}")
+#         time.sleep(5)
+# print("🚀 Producer started. Sending incremental data to Kafka via Tor...")
+
+
 # Track last seen for each aircraft
 last_seen = {}  # {icao24: last_contact}
 

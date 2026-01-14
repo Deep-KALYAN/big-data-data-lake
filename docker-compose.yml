@@ -113,6 +113,15 @@ services:
     image: dperson/torproxy
     container_name: tor
     restart: unless-stopped
+    # # ExitNodes {fr} tells Tor to prefer servers in France.
+    # # StrictNodes 1 forces Tor to only use France. 
+    # # (If you set this to 0, Tor will try France first 
+    # # but use another country if the French servers are too slow).
+    # environment:
+    #   - LOCATION=FR       # Equivalent to ExitNodes {fr}
+    #   - STRICT=1         # Equivalent to StrictNodes 1
+    #   # This is the magic line for IP rotation
+    #   - TOR_MaxCircuitDirtiness=600 # Rotate IP every 10 minutes (600 seconds)
     ports:
       - "9050:9050"   # SOCKS5
       - "9051:9051"   # Control port
@@ -143,9 +152,20 @@ services:
       - HDFS_URL=http://namenode:9870
       - HDFS_USER=root
       - PROCESSED_DIR=/opensky/processed
+      # - STREAMLIT_SERVER_FILE_WATCHER_TYPE=none
+      # - STREAMLIT_BROWSER_GATHER_USAGE_STATS=false
     depends_on:
       - namenode
       - consumer
+
+    # ---------- ANALYTICS SERVICE ----------
+  analytics:
+    build:
+      context: ./services/analytics
+    container_name: opensky-analytics
+    ports:
+      - "8601:8501"   # host:container → separate from dashboard
+    restart: unless-stopped
 
 # ------------- VOLUMES -----------------
 volumes:

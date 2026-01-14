@@ -1,3 +1,4 @@
+# Dockerfile for Streamlit previous Dashboard Service
 FROM python:3.10-slim
 
 WORKDIR /app
@@ -11,4 +12,5 @@ EXPOSE 8501
 ENV PYTHONUNBUFFERED=1
 
 CMD ["streamlit", "run", "dashboard.py", "--server.port=8501", "--server.address=0.0.0.0"]
+
 # CMD ["python", "-c", "import time; time.sleep(10**9)"]

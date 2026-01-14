@@ -143,6 +143,9 @@ opensky-dashboard	Running
 Component	URL
 Dashboard	http://localhost:8501
 
+Analytics  http://localhost:8601
+
+
 HDFS Namenode UI	http://localhost:9870
 
 Kafka	9092
@@ -177,10 +180,12 @@ Uses WebHDFS API
 Directories:
 
 /opensky/raw
+Datanode UI: http://localhost:9870/explorer.html#/opensky/processed
+
+
 /opensky/processed
+Namenode UI: http://localhost:9870/explorer.html#/opensky/csv
 
-
-Namenode UI: http://localhost:9870
 
 📊 Streamlit Dashboard
 

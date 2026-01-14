@@ -50,3 +50,6 @@ logs/
 
 # Environment variables
 .env
+
+# Data Examples
+data_example/

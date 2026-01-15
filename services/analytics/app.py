@@ -3,6 +3,9 @@ import pandas as pd
 from hdfs import InsecureClient
 import plotly.express as px
 import numpy as np
+from sklearn.cluster import KMeans
+from sklearn.preprocessing import StandardScaler
+import datetime
 
 # ----------------------------
 # Page setup
@@ -32,11 +35,74 @@ def load_latest_processed_csv():
         st.error(f"HDFS connection failed: {e}")
         return pd.DataFrame()
 
+
+# ----------------------------
+# Apply clustering to add flight phase labels
+# ----------------------------
+def add_phase_of_flight_clusters(df):
+    """
+    Adds an unsupervised phase-of-flight cluster label
+    based on altitude, speed, and vertical rate.
+    """
+
+    required_cols = [
+        "baro_altitude_m",
+        "velocity_ms",
+        "vertical_rate_ms"
+    ]
+
+    # Keep only valid rows
+    features = df[required_cols].dropna()
+
+    if len(features) < 50:
+        df["flight_phase"] = "Unknown"
+        return df
+
+    # Normalize features (CRITICAL)
+    scaler = StandardScaler()
+    X = scaler.fit_transform(features)
+
+    # KMeans clustering
+    kmeans = KMeans(n_clusters=3, random_state=42)
+    clusters = kmeans.fit_predict(X)
+
+    # Assign cluster ids
+    df.loc[features.index, "phase_cluster"] = clusters
+
+    return df
+
+# ----------------------------
+# Label flight phases based on clusters
+# ----------------------------
+def label_flight_phases(df):
+    phase_stats = df.groupby("phase_cluster")[[
+        "baro_altitude_m",
+        "velocity_ms",
+        "vertical_rate_ms"
+    ]].mean()
+
+    phase_map = {}
+
+    for cluster, row in phase_stats.iterrows():
+        if row["vertical_rate_ms"] > 1:
+            phase_map[cluster] = "Takeoff / Climb"
+        elif row["vertical_rate_ms"] < -1:
+            phase_map[cluster] = "Descent / Approach"
+        else:
+            phase_map[cluster] = "Cruise"
+
+    df["flight_phase"] = df["phase_cluster"].map(phase_map)
+    return df
+
+
+
 # ----------------------------
 # Load data
 # ----------------------------
 with st.spinner("Loading latest flight data..."):
     df = load_latest_processed_csv()
+    df = add_phase_of_flight_clusters(df)
+    df = label_flight_phases(df)
 
 if df.empty:
     status.warning("No processed flight data available yet.")
@@ -44,16 +110,59 @@ if df.empty:
 else:
     status.success(f"Loaded {len(df)} flights from HDFS")
 
+
+# ----------------------------
+# min max date of data
+# ----------------------------
+# Convert Unix timestamp to datetime objects
+df['timestamp_dt'] = pd.to_datetime(df['time_position'], unit='s')
+
+# Find the range
+min_date = df['timestamp_dt'].min()
+max_date = df['timestamp_dt'].max()
+
+
+# Check if the latest data is older than 5 minutes
+time_diff = datetime.datetime.now() - max_date
+
+# Format the dates as strings once to keep the code clean
+start_str = min_date.strftime('%Y-%m-%d %H:%M')
+end_str = max_date.strftime('%Y-%m-%d %H:%M')
+
+if time_diff.total_seconds() > 300:
+    # Use an f-string to combine everything into ONE argument
+    st.warning(f"⚠️ Data delayed ({int(time_diff.total_seconds()/60)}m ago) | Start: {start_str} | Last: {end_str}")
+else:
+    # Use an f-string here too
+    st.success(f"✅ Real-Time Stream | Start: {start_str} | Last Update: {end_str}")
+
+
 # ----------------------------
 # Sidebar Filters
 # ----------------------------
 st.sidebar.header("Filters")
 
-# Origin country filter
-countries = df["origin_country"].unique()
-selected_countries = st.sidebar.multiselect(
-    "Aircraft Registration Country", countries, default=list(countries)
-)
+# # Origin country filter
+# countries = df["origin_country"].unique()
+# selected_countries = st.sidebar.multiselect(
+#     "Aircraft Registration Country", countries, default=list(countries)
+# )
+# --- Origin country filter with Select All ---
+countries = sorted(df["origin_country"].dropna().unique())
+
+# Add the checkbox
+select_all_countries = st.sidebar.checkbox("Select All Countries", value=True)
+
+if select_all_countries:
+    # If select all is ON, display the multiselect but pre-fill it and disable it
+    selected_countries = st.sidebar.multiselect(
+        "Aircraft Registration Country", countries, default=list(countries), disabled=True
+    )
+else:
+    # If OFF, let the user pick
+    selected_countries = st.sidebar.multiselect(
+        "Aircraft Registration Country", countries, default=[]
+    )
 
 # Airborne only
 airborne_only = st.sidebar.checkbox("Airborne Only", value=True)
@@ -68,18 +177,47 @@ min_alt, max_alt = st.sidebar.slider(
 lat_range = st.sidebar.slider("Latitude Range", -90.0, 90.0, (-90.0, 90.0))
 lon_range = st.sidebar.slider("Longitude Range", -180.0, 180.0, (-180.0, 180.0))
 
+
+# ----------------------------
+# Filters
+# ----------------------------
+# st.sidebar.header("Filters")
+
+# Flight phase filter
+phase_options = df["flight_phase"].dropna().unique()
+selected_phase = st.sidebar.multiselect(
+    "Flight Phase",
+    options=phase_options,
+    default=list(phase_options)
+)
+
+# Get unique list of callsigns, sorted, and remove any empty values
+all_callsigns = sorted(df["callsign"].dropna().unique())
+
+# Add a Search/Filter for specific callsigns
+selected_callsigns = st.sidebar.multiselect(
+    "Search specific Flight(s)",
+    options=all_callsigns,
+    help="Type the callsign (e.g., IGO1151) to find a specific aircraft."
+)
 # ----------------------------
 # Apply filters
 # ----------------------------
+# Create a mask for callsign filter: If nothing is selected, show all. 
+# If something is selected, filter by those specific callsigns.
+callsign_filter = df["callsign"].isin(selected_callsigns) if selected_callsigns else True
 filtered_df = df[
     (df["origin_country"].isin(selected_countries)) &
     ((df["on_ground"] == False) if airborne_only else True) &
     (df["baro_altitude_m"].fillna(0).between(min_alt, max_alt)) &
     (df["latitude"].between(lat_range[0], lat_range[1])) &
-    (df["longitude"].between(lon_range[0], lon_range[1]))
+    (df["longitude"].between(lon_range[0], lon_range[1])) &
+    (df["flight_phase"].isin(selected_phase)) &
+    (callsign_filter)
 ]
 
 st.sidebar.write(f"Flights displayed: {len(filtered_df)}")
+
 
 # ----------------------------
 # KPIs
@@ -117,17 +255,19 @@ if not filtered_df.empty:
         color="color_altitude",
         size="marker_size",
         projection="natural earth",
-        height=600,
+        height=800,
         color_discrete_sequence=px.colors.sequential.Viridis
     )
     st.plotly_chart(fig_map, use_container_width=True)
 else:
     st.info("No flights match the filters.")
 
+
+
 # ----------------------------
-# AI INSIGHTS — Outliers
+# INSIGHTS — Outliers
 # ----------------------------
-st.subheader("🧠 AI Insights: Extreme Flights")
+st.subheader("🧠 Insights: Extreme Flights")
 
 if not filtered_df.empty:
     # Remove NaNs
@@ -161,9 +301,9 @@ if not filtered_df.empty:
         )
 
 # ----------------------------
-# AI INSIGHTS — Suspicious Flights
+# INSIGHTS — Suspicious Flights
 # ----------------------------
-st.subheader("⚠️ AI Insights: Suspicious Flight Behavior")
+st.subheader("⚠️ Insights: Suspicious Flight Behavior")
 
 suspicious = filtered_df[
     (filtered_df["on_ground"] == False) &
@@ -185,9 +325,9 @@ st.dataframe(
 )
 
 # ----------------------------
-# AI INSIGHTS — Country Intelligence
+# INSIGHTS — Country Intelligence
 # ----------------------------
-st.subheader("🌐 AI Insights: Country Intelligence")
+st.subheader("🌐 Insights: Country Intelligence")
 
 country_summary = (
     filtered_df
@@ -239,17 +379,22 @@ PREDICTION_SECONDS = 300  # 5 minutes
 
 pred_df = filtered_df.copy()
 
-pred_df[["pred_lat", "pred_lon"]] = pred_df.apply(
-    lambda r: predict_position(
-        r["latitude"],
-        r["longitude"],
-        r["velocity_ms"],
-        r["true_track"],
-        PREDICTION_SECONDS
-    ),
-    axis=1,
-    result_type="expand"
-)
+if not pred_df.empty:
+    pred_df[["pred_lat", "pred_lon"]] = pred_df.apply(
+        lambda r: predict_position(
+            r["latitude"],
+            r["longitude"],
+            r["velocity_ms"],
+            r["true_track"],
+            PREDICTION_SECONDS
+        ),
+        axis=1,
+        result_type="expand"
+    )
+else:
+    # Create empty columns if there is no data to prevent the dashboard from crashing later
+    pred_df["pred_lat"] = None
+    pred_df["pred_lon"] = None
 
 # ----------------------------
 # Visualize Actual vs Predicted (AI Visualization)
@@ -263,7 +408,7 @@ fig_pred = px.scatter_geo(
     lon="longitude",
     color_discrete_sequence=["blue"],
     opacity=0.6,
-    height=600,
+    height=800,
 )
 
 fig_pred.add_scattergeo(
@@ -284,8 +429,52 @@ st.plotly_chart(fig_pred, use_container_width=True)
 # ----------------------------
 
 
+st.subheader("📊 Flight KPIs")
+
+col1, col2, col3 = st.columns(3)
+col1.metric("Flights Displayed", len(filtered_df))
+col2.metric("Airborne", (filtered_df["on_ground"] == False).sum())
+col3.metric("Countries", filtered_df["origin_country"].nunique())
 
 
+
+# Marker size safe (positive only)
+marker_size = np.where(
+    np.isnan(filtered_df["baro_altitude_m"]),
+    5,  # default size if NaN
+    np.clip(filtered_df["baro_altitude_m"] / 1000, 5, 20)  # scale
+)
+
+fig_map = px.scatter_geo(
+    filtered_df,
+    lat="latitude",
+    lon="longitude",
+    color="flight_phase",
+    hover_name="callsign",
+    hover_data={
+        "origin_country": True,
+        "velocity_ms": True,
+        "baro_altitude_m": True,
+        "vertical_rate_ms": True
+    },
+    size=marker_size,
+    projection="natural earth",
+    title="🌍 Flight Positions Map by Phase",
+    height=800
+)
+
+# Streamlit display
+st.plotly_chart(fig_map, use_container_width=True)
+
+
+st.subheader("🧪 Phase-of-Flight Summary")
+st.dataframe(
+    df.groupby("flight_phase")[[
+        "baro_altitude_m",
+        "velocity_ms",
+        "vertical_rate_ms"
+    ]].mean().round(2)
+)
 
 
 

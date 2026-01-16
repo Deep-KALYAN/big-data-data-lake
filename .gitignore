@@ -33,6 +33,7 @@ docker-compose.override.yml
 # Hadoop data
 myhadoop/
 hadoop-data/
+metadata/
 
 # IDE
 .vscode/

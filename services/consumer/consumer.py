@@ -1,5 +1,6 @@
 import json
 import time
+import os
 import pandas as pd
 from datetime import datetime
 from kafka import KafkaConsumer
@@ -15,12 +16,30 @@ HDFS_USER = 'root'
 
 HDFS_RAW_DIR = '/opensky/raw'
 HDFS_PROCESSED_DIR = '/opensky/processed'
+METADATA_PATH = '/app/metadata/aircraft_db.csv'
 
 # Batching settings
 FLUSH_INTERVAL = 60  # seconds
 
 # Connect to HDFS
 client = InsecureClient(HDFS_URL, user=HDFS_USER)
+
+#---------------------------------------
+# Load metadata once at startup
+print("📖 Loading aircraft metadata...")
+try:
+    metadata_df = pd.read_csv(
+        METADATA_PATH,
+        quotechar="'",  # Your CSV has single quotes
+        usecols=['icao24', 'model', 'operator', 'manufacturerName', 'categoryDescription']
+    )
+    # Clean icao24 for matching
+    metadata_df['icao24'] = metadata_df['icao24'].astype(str).str.lower().str.strip()
+    print(f"✅ Metadata loaded: {len(metadata_df)} records")
+except Exception as e:
+    print(f"❌ Failed to load metadata: {e}")
+    metadata_df = pd.DataFrame(columns=['icao24', 'model', 'operator', 'manufacturerName', 'categoryDescription'])
+#---------------------------------------
 
 # Ensure directories exist
 for dir_path in [HDFS_RAW_DIR, HDFS_PROCESSED_DIR]:
@@ -44,9 +63,9 @@ raw_buffer = []
 processed_buffer = []
 last_flush = time.time()
 
-def process_state(s):
-    """Convert OpenSky state array into dict (from your original code)."""
-    return {
+def process_state(s, metadata_df):
+    """Convert OpenSky state array into dict (from your original code)and enrich with metadata."""
+    basic_info = {
         "icao24": s[0],
         "callsign": s[1].strip() if s[1] else None,
         "origin_country": s[2],
@@ -65,9 +84,35 @@ def process_state(s):
         "position_source": s[16],
         "category": s[17] if len(s) > 17 else None
     }
-
+    # Enrich with metadata
+    icao_key = str(s[0]).lower().strip() if s[0] else ""
+    if icao_key and not metadata_df.empty:
+        # Find matching metadata
+        match = metadata_df[metadata_df['icao24'] == icao_key]
+        if not match.empty:
+            basic_info.update({
+                "model": match.iloc[0].get('model'),
+                "operator": match.iloc[0].get('operator'),
+                "manufacturerName": match.iloc[0].get('manufacturerName'),
+                "categoryDescription": match.iloc[0].get('categoryDescription')
+            })
+    
+    return basic_info
 
 def flush_to_hdfs():
+    print("📖 Loading aircraft metadata...")
+    try:
+        metadata_df = pd.read_csv(
+            METADATA_PATH,
+            quotechar="'",
+            usecols=['icao24', 'model', 'operator', 'manufacturerName', 'categoryDescription']
+        )
+        metadata_df['icao24'] = metadata_df['icao24'].astype(str).str.lower().str.strip()
+        print(f"✅ Metadata loaded: {len(metadata_df)} records")
+    except Exception as e:
+        print(f"❌ Failed: {e}")
+        metadata_df = pd.DataFrame()
+
     global raw_buffer, processed_buffer
 
     if not raw_buffer and not processed_buffer:
@@ -93,6 +138,19 @@ def flush_to_hdfs():
         print(f"📦 Saved PROCESSED batch → {processed_path} ({len(processed_buffer)} records)")
         processed_buffer = []
 
+    print("📖 Loading aircraft metadata...")
+    try:
+        metadata_df = pd.read_csv(
+            METADATA_PATH,
+            quotechar="'",
+            usecols=['icao24', 'model', 'operator', 'manufacturerName', 'categoryDescription']
+        )
+        metadata_df['icao24'] = metadata_df['icao24'].astype(str).str.lower().str.strip()
+        print(f"✅ Metadata loaded: {len(metadata_df)} records")
+    except Exception as e:
+        print(f"❌ Failed: {e}")
+        metadata_df = pd.DataFrame()
+
 
 # 🌀 Main loop
 for message in consumer:
@@ -113,7 +171,7 @@ for message in consumer:
     # ---- Process and clean ----
     for s in states:
         if isinstance(s, list) and len(s) >= 17:
-            processed_buffer.append(process_state(s))
+            processed_buffer.append(process_state(s, metadata_df))
 
     # ---- Time-based flush ----
     if time.time() - last_flush > FLUSH_INTERVAL:

@@ -200,12 +200,20 @@ selected_callsigns = st.sidebar.multiselect(
     options=all_callsigns,
     help="Type the callsign (e.g., IGO1151) to find a specific aircraft."
 )
+
+st.sidebar.subheader("Metadata Filters")
+if not df.empty and 'operator' in df.columns:
+    operators = sorted(df["operator"].dropna().unique())
+    selected_operators = st.sidebar.multiselect(
+        "Filter by Operator", operators, default=[]
+    )
 # ----------------------------
 # Apply filters
 # ----------------------------
 # Create a mask for callsign filter: If nothing is selected, show all. 
 # If something is selected, filter by those specific callsigns.
 callsign_filter = df["callsign"].isin(selected_callsigns) if selected_callsigns else True
+operator_filter = df["operator"].isin(selected_operators) if selected_operators else True
 filtered_df = df[
     (df["origin_country"].isin(selected_countries)) &
     ((df["on_ground"] == False) if airborne_only else True) &
@@ -213,7 +221,8 @@ filtered_df = df[
     (df["latitude"].between(lat_range[0], lat_range[1])) &
     (df["longitude"].between(lon_range[0], lon_range[1])) &
     (df["flight_phase"].isin(selected_phase)) &
-    (callsign_filter)
+    (callsign_filter) &
+    (operator_filter)
 ]
 
 st.sidebar.write(f"Flights displayed: {len(filtered_df)}")
@@ -476,7 +485,49 @@ st.dataframe(
     ]].mean().round(2)
 )
 
+# ----------------------------
+# METADATA KPIS & ENRICHMENT INSIGHTS
+# ----------------------------
+st.markdown("---")
+st.subheader("🏢 Fleet & Manufacturer Intelligence")
 
+if not filtered_df.empty:
+    m_col1, m_col2, m_col3 = st.columns(3)
+    
+    with m_col1:
+        # Safety check for mode
+        m_mode = filtered_df['manufacturerName'].dropna().mode()
+        top_manuf = m_mode.iloc[0] if not m_mode.empty else "N/A"
+        st.metric("Top Manufacturer", top_manuf)
+    
+    with m_col2:
+        # Unique models count
+        unique_models = filtered_df['model'].nunique()
+        st.metric("Unique Models", unique_models)
+        
+    with m_col3:
+        # Most frequent category
+        c_mode = filtered_df['categoryDescription'].dropna().mode()
+        top_cat = c_mode.iloc[0] if not c_mode.empty else "N/A"
+        st.metric("Primary Category", top_cat)
+
+    # Visualization: Top Manufacturers Chart
+    st.markdown("### 📊 Active Fleet by Manufacturer")
+    manuf_counts = filtered_df['manufacturerName'].value_counts().head(10).reset_index()
+    
+    if not manuf_counts.empty:
+        manuf_counts.columns = ['Manufacturer', 'Count']
+        fig_manuf = px.bar(
+            manuf_counts, 
+            x='Count', 
+            y='Manufacturer', 
+            orientation='h',
+            color='Count',
+            template="plotly_dark"
+        )
+        st.plotly_chart(fig_manuf, use_container_width=True)
+    else:
+        st.info("No manufacturer data available for current filters.")
 
 # import streamlit as st
 # import pandas as pd

@@ -138,7 +138,8 @@ services:
       - namenode
     volumes:
       - ./services/consumer:/app
-
+      - ./metadata:/app/metadata  # Mount metadata for enrichment
+      
   # ---------- DASHBOARD (Streamlit) ----------
   dashboard:
     build:
@@ -166,6 +167,23 @@ services:
     ports:
       - "8601:8501"   # host:container → separate from dashboard
     restart: unless-stopped
+
+# ---------- SILVER LAYER (HDFS Raw → Metadata Join → HDFS Parquet) ----------
+  silver_layer:
+    build:
+      context: ./services/silver_layer
+      dockerfile: Dockerfile
+    container_name: opensky-silver
+    restart: unless-stopped
+    depends_on:
+      - namenode
+      - consumer
+    volumes:
+      # Map the folder containing your 100MB aircraft metadata CSV
+      - ./metadata:/app/metadata 
+    environment:
+      - HDFS_URL=http://namenode:9870
+      - HDFS_USER=root
 
 # ------------- VOLUMES -----------------
 volumes:

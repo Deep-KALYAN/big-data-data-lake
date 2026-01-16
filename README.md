@@ -186,6 +186,8 @@ Datanode UI: http://localhost:9870/explorer.html#/opensky/processed
 /opensky/processed
 Namenode UI: http://localhost:9870/explorer.html#/opensky/csv
 
+/opensky/silver      ---parquet after aggregation 
+http://localhost:9870/explorer.html#/opensky/silver
 
 📊 Streamlit Dashboard
 
